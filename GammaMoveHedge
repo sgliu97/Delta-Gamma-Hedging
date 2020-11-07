@@ -1,0 +1,88 @@
+def GammaMoveHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_cost_asset, trans_cost_option, band):
+    # obtain initial prices for options
+    price_put = PutPrice(S0, K, T, r, sigma_Q)
+    price_call = CallPrice(S0, K, T_call, r, sigma_Q)
+    
+    # Initialization, S - asset prices, Y - position on Bank account, alpha - position on equity, (gamma - position on option)
+    #     Each row represents one simulation, where each entry represents status at different time
+    #     -> Nsims rows, Ndt columns
+    S = np.zeros((Nsims, Ndt+1))
+    Y = np.zeros((Nsims, Ndt+1))
+    alpha = np.zeros((Nsims, Ndt+1))
+    gamma = np.zeros((Nsims, Ndt+1))
+    
+    #    Fill in S0, alpha0, gamma0, Y0, no-balance at T
+    alpha[:,-1] = np.NaN
+    gamma[:,-1] = np.NaN
+    S[:,0] = S0
+    gamma[:,0] = Gamma(S[:,0], K, T, r, sigma_Q)/Gamma(S[:,0], K, T_call, r, sigma_Q)
+    alpha[:,0] = PutDelta(S[:,0], K, T, r, sigma_Q) - gamma[:,0] * CallDelta(S[:,0], K, T_call, r, sigma_Q)
+    Y[:,0] = 1 * price_put - alpha[:,0] * S[:,0] - np.abs(alpha[:,0]) * trans_cost_asset - gamma[:,0] * price_call - np.abs(gamma[:,0]) * trans_cost_option
+    
+    # Initialized upper bound and lower bound
+    upper_b = alpha[:,0] + band
+    lower_b = alpha[:,0] - band
+    
+    #    Create time spaces, obtain dt
+    t = np.linspace(0, T, Ndt+1)
+    dt = t[1] - t[0]
+    
+    #    Looping through time steps, make changes on t = i+1 based on t = i
+    #     so starting at 0, ending at Ndt - 1, last changes are made on Ndt
+    for i in range(Ndt):
+        
+        # Brownian Motion simulation at time i
+        # Generate Nsims of them, since we compute on all simulations
+        dW = np.sqrt(dt) * np.random.randn(Nsims)
+        
+        # Get asset prices using GBM, at i+1. Note asset prices are based on P measure (real-world measure)
+        S[:, i+1] = S[:,i] * np.exp((mu-0.5*sigma_P**2)*dt + sigma_P*dW )
+        
+        # REBALANCE STEP
+        #     rebalance only when we see alpha reaches boundary, then update the boundary.
+        if i < Ndt - 1:
+            
+            # update alpha and gamma for now, and check if we actually going to update it (accept)
+            gamma[:,i+1] = Gamma(S[:,i+1], K, T-t[i+1], r, sigma_Q)/Gamma(S[:,i+1], K, T_call-t[i+1], r, sigma_Q)
+            
+            alpha[:,i+1] = PutDelta(S[:,i+1], K, T-t[i+1], r, sigma_Q) - gamma[:, i+1] * CallDelta(S[:,i+1], K, T_call-t[i+1], r, sigma_Q)
+            
+            for j in range(Nsims):
+                
+                # if in the band, the don't accept
+                if ((lower_b[j] <= alpha[j,i+1] <= upper_b[j]) and alpha[j,i+1] < 0):
+                    alpha[j,i+1] = alpha[j,i]
+                    gamma[j,i+1] = gamma[j,i]
+                # otherwise accept, and propose new bounds
+                else:
+                    upper_b[j] = alpha[j, i+1] + band
+                    lower_b[j] = alpha[j, i+1] - band
+            
+            # accumulate bank account, and minus all transaction costs & payment
+            Y[:,i+1] = Y[:,i] * np.exp(r*dt) - (alpha[:,i+1] - alpha[:,i]) * S[:,i+1] - \
+                        (gamma[:,i+1] - gamma[:,i]) * CallPrice(S[:,i+1], K, T_call-t[i+1], r, sigma_Q) - \
+                        trans_cost_asset*np.abs(alpha[:,i+1] - alpha[:,i]) - trans_cost_option*np.abs(gamma[:,i+1] - gamma[:,i])
+            
+                
+            
+       # Now time is at T
+    
+    # compute terminal payoff owe to client, note the client will exercise only when payoff is positive
+    payoff = K - S[:,-1]
+    payoff[payoff<0] = 0
+    
+    
+    # liquidate assets (and options, if owned)
+    Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] + gamma[:,-2] * CallPrice(S[:,-1], K, T_call-T, r, sigma_Q) \
+                - np.abs(alpha[:,-2]) * trans_cost_asset - np.abs(gamma[:,-2]) * trans_cost_option
+    
+    # Compute PnL and BV
+    # PnL - profit and loss
+    # BV - book value
+    PnL = Y[:,-1] - payoff
+    BV = Y + S * alpha 
+    
+    # return everything
+    return t, S, Y, alpha, gamma, BV, PnL
+    
+
