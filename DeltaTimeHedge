@@ -63,6 +63,7 @@ def DeltaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, Ndt, Nsims, trans_cost_ass
     # BV - book value
     PnL = Y[:,-1] - payoff
     BV = Y + S * alpha
+    BV[:,-1] = Y[:,-1]
     
     # return everything
     return t, S, Y, alpha, BV, PnL, total_trans_cost
