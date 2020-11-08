@@ -56,7 +56,9 @@ def DeltaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, Ndt, Nsims, trans_cost_ass
     payoff[payoff<0] = 0
     
     # liquidate assets (and options, if owned)
-    Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] - np.abs(alpha[:,-2]) * trans_cost_asset
+    cost_transaction = np.abs(alpha[:,-2]) * trans_cost_asset
+    Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] - cost_transaction
+    total_trans_cost += cost_transaction
     
     # Compute PnL and BV
     # PnL - profit and loss
