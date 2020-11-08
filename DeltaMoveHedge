@@ -1,0 +1,115 @@
+def DeltaMoveHedge(S0, mu, sigma_P, sigma_Q, r, K, T, Ndt, Nsims, trans_cost_asset, band):
+    
+    # NOTE: move-based hedge has an additional parameter called band
+    
+    # obtain initial prices for options
+    price_put = PutPrice(S0, K, T, r, sigma_Q)
+    
+    # Initialization, S - asset prices, Y - position on Bank account, alpha - position on equity, (gamma - position on option)
+    #     Each row represents one simulation, where each entry represents status at different time
+    #     -> Nsims rows, Ndt columns
+    S = np.zeros((Nsims, Ndt+1))
+    Y = np.zeros((Nsims, Ndt+1))
+    alpha = np.zeros((Nsims, Ndt+1))
+    
+    #    Count total transaction cost
+    total_trans_cost = np.zeros(Nsims)
+    
+    #    Fill in S0, alpha0, Y0, no-balance at T
+    alpha[:,-1] = np.NaN
+    S[:,0] = S0
+    alpha[:,0] = PutDelta(S[:,0], K, T, r, sigma_Q)
+    total_trans_cost  =  np.abs(alpha[:,0]) * trans_cost_asset
+    Y[:,0] = 1 * price_put - alpha[:,0] * S[:,0] - total_trans_cost
+    
+    
+    
+    # compute boundary
+    upper_b = alpha[:,0] + band
+    lower_b = alpha[:,0] - band
+    
+    #    Create time spaces, obtain dt
+    t = np.linspace(0, T, Ndt+1)
+    dt = t[1] - t[0]
+    
+    """
+    #    Looping through time steps, make changes on t = i+1 based on t = i
+    #     so starting at 0, ending at Ndt - 1, last changes are made on Ndt
+    
+    !!Note: hard to operate on all columns to dynamically update boundaries - this part will be left incomplete for potential 
+          solutions, instead, I will do a double loop to iterate over all entries.
+    
+    for i in range(Ndt):
+        
+        # Brownian Motion simulation at time i
+        # Generate Nsims of them, since we compute on all simulations
+        dW = np.sqrt(dt) * np.random.randn(Nsims)
+        
+        # Get asset prices using GBM, at i+1. Note asset prices are based on P measure (real-world measure)
+        S[:, i+1] = S[:,i] * np.exp((mu-0.5*sigma_P**2)*dt + sigma_P*dW )
+        
+        # REBALANCE STEP
+        # rebalance when delta went beyond boundaries
+    """
+    
+    # ITERATE OVER ALL ENTRIES
+    
+    for i in range(Ndt):
+        
+        # simulate brownian motion at time i+1
+        dW = np.sqrt(dt) * np.random.randn(Nsims)
+        
+        # generate asset prices at time i+1
+        S[:,i+1] = S[:,i] * np.exp((mu-0.5*sigma_P**2)*dt + sigma_P*dW )
+        
+        # Now set alpha at i+1 = alpha at i, assuming no rebalance, and change it later
+        alpha[:,i+1] = alpha[:,i]
+        
+        # REBALANCE STEP:
+        # detect if delta hits the boundary at any simulation paths, so iterate over all sim paths.
+        if i < Ndt - 1:
+            # compute delta, #Nsims of them
+            delta = PutDelta(S[:,i+1], K, T-t[i+1], r, sigma_Q)
+            
+            for j in range(Nsims):
+                # check if rebalance is needed, i.e. check if delta hits boundaries
+                if delta[j] >= -0.01:
+                    alpha[j,i+1] = -0.01
+                    upper_b[j] = -0.01 + band
+                    lower_b[j] = -0.01 - band
+                elif delta[j] <= -0.99:
+                    alpha[j,i+1] = -0.99
+                    upper_b[j] = -0.99 + band
+                    lower_b[j] = -0.99 - band
+                elif delta[j] >= upper_b[j] or delta[j] <= lower_b[j]:
+                    alpha[j,i+1] = delta[j]
+                    upper_b[j] = delta[j] + band
+                    lower_b[j] = delta[j] - band
+                    # AT here, record tau[j,i] if needed, where tau could be the matrix storing rebalance point
+        
+        # Record cost of transaction
+        cost_transaction = trans_cost_asset*np.abs(alpha[:,i+1] - alpha[:,i])
+        total_trans_cost += cost_transaction
+        
+        # Now update bank account, according to alpha[:,i+1]
+        Y[:,i+1] = Y[:,i] * np.exp(r*dt) - (alpha[:,i+1] - alpha[:,i]) * S[:,i+1] - cost_transaction
+        
+        
+    # Now time is at T
+    
+    # compute terminal payoff owe to client, note the client will exercise only when payoff is positive
+    payoff = K - S[:,-1]
+    payoff[payoff<0] = 0
+    
+    # liquidate assets (and options, if owned)
+    Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] - np.abs(alpha[:,-2]) * trans_cost_asset
+    
+    # Compute PnL and BV
+    # PnL - profit and loss
+    # BV - book value
+    PnL = Y[:,-1] - payoff
+    BV = Y + S * alpha
+    BV[:,-1] = Y[:,-1]
+    
+    # return everything
+    return t, S, Y, alpha, BV, PnL, total_trans_cost
