@@ -71,7 +71,7 @@ def GammaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     # BV - book value
     PnL = Y[:,-1] - payoff
     BV = Y + S * alpha + f * gamma
-    BV[:-1] = Y[:,-1]
+    BV[:,-1] = Y[:,-1]
     
     # return everything
     return t, S, Y, alpha, gamma, BV, PnL
