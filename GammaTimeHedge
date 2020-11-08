@@ -12,6 +12,9 @@ def GammaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     alpha = np.zeros((Nsims, Ndt+1))
     gamma = np.zeros((Nsims, Ndt+1))
     
+    #    Count total transaction cost
+    total_trans_cost = np.zeros(Nsims)
+    
     #    Store the price of call option here
     f = np.zeros((Nsims, Ndt+1))
     
@@ -22,7 +25,8 @@ def GammaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     f[:,0] = CallPrice(S[:,0], K, T_call, r, sigma_Q)
     gamma[:,0] = Gamma(S[:,0], K, T, r, sigma_Q)/Gamma(S[:,0], K, T_call, r, sigma_Q)
     alpha[:,0] = PutDelta(S[:,0], K, T, r, sigma_Q) - gamma[:,0] * CallDelta(S[:,0], K, T_call, r, sigma_Q)
-    Y[:,0] = 1 * price_put - alpha[:,0] * S[:,0] - np.abs(alpha[:,0]) * trans_cost_asset - gamma[:,0] * price_call - np.abs(gamma[:,0]) * trans_cost_option
+    total_trans_cost = np.abs(alpha[:,0]) * trans_cost_asset + np.abs(gamma[:,0]) * trans_cost_option
+    Y[:,0] = 1 * price_put - alpha[:,0] * S[:,0]- gamma[:,0] * price_call - total_trans_cost
     
     
     #    Create time spaces, obtain dt
@@ -51,10 +55,11 @@ def GammaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
             gamma[:,i+1] = Gamma(S[:,i+1], K, T-t[i+1], r, sigma_Q)/Gamma(S[:,i+1], K, T_call-t[i+1], r, sigma_Q)
             alpha[:,i+1] = PutDelta(S[:,i+1], K, T-t[i+1], r, sigma_Q) - gamma[:, i+1] * CallDelta(S[:,i+1], K, T_call-t[i+1], r, sigma_Q)
             
+            cost_transaction = trans_cost_asset*np.abs(alpha[:,i+1] - alpha[:,i]) + trans_cost_option*np.abs(gamma[:,i+1] - gamma[:,i])
+            total_trans_cost += cost_transaction
             # Bank account accumunlated by risk-free rate, then pay for rebalance cost 
             Y[:,i+1] = Y[:,i] * np.exp(r*dt) - (alpha[:,i+1] - alpha[:,i]) * S[:,i+1] - \
-                        (gamma[:,i+1] - gamma[:,i]) * f[:,i+1] - \
-                        trans_cost_asset*np.abs(alpha[:,i+1] - alpha[:,i]) - trans_cost_option*np.abs(gamma[:,i+1] - gamma[:,i])
+                        (gamma[:,i+1] - gamma[:,i]) * f[:,i+1] - cost_transaction
             
        # Now time is at T
     
@@ -63,8 +68,10 @@ def GammaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     payoff[payoff<0] = 0
     
     # liquidate assets (and options, if owned)
+    cost_transaction = np.abs(alpha[:,-2]) * trans_cost_asset + np.abs(gamma[:,-2]) * trans_cost_option
+    total_trans_cost += cost_transaction
     Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] + gamma[:,-2] * f[:,-1] \
-                - np.abs(alpha[:,-2]) * trans_cost_asset - np.abs(gamma[:,-2]) * trans_cost_option
+                - cost_transaction
     
     # Compute PnL and BV
     # PnL - profit and loss
@@ -74,4 +81,4 @@ def GammaTimeHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     BV[:,-1] = Y[:,-1]
     
     # return everything
-    return t, S, Y, alpha, gamma, BV, PnL
+    return t, S, Y, alpha, gamma, BV, PnL, total_trans_cost
