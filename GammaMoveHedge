@@ -11,13 +11,21 @@ def GammaMoveHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     alpha = np.zeros((Nsims, Ndt+1))
     gamma = np.zeros((Nsims, Ndt+1))
     
+    #    Count total transaction cost
+    total_trans_cost = np.zeros(Nsims)
+    
+    #    Store the price of call option here
+    f = np.zeros((Nsims, Ndt+1))
+    
     #    Fill in S0, alpha0, gamma0, Y0, no-balance at T
     alpha[:,-1] = np.NaN
     gamma[:,-1] = np.NaN
     S[:,0] = S0
+    f[:,0] = CallPrice(S[:,0], K, T_call, r, sigma_Q)
     gamma[:,0] = Gamma(S[:,0], K, T, r, sigma_Q)/Gamma(S[:,0], K, T_call, r, sigma_Q)
     alpha[:,0] = PutDelta(S[:,0], K, T, r, sigma_Q) - gamma[:,0] * CallDelta(S[:,0], K, T_call, r, sigma_Q)
-    Y[:,0] = 1 * price_put - alpha[:,0] * S[:,0] - np.abs(alpha[:,0]) * trans_cost_asset - gamma[:,0] * price_call - np.abs(gamma[:,0]) * trans_cost_option
+    total_trans_cost = np.abs(alpha[:,0]) * trans_cost_asset + np.abs(gamma[:,0]) * trans_cost_option
+    Y[:,0] = 1 * price_put - alpha[:,0] * S[:,0] - gamma[:,0] * price_call - total_trans_cost
     
     # Initialized upper bound and lower bound
     upper_b = alpha[:,0] + band
@@ -37,6 +45,9 @@ def GammaMoveHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
         
         # Get asset prices using GBM, at i+1. Note asset prices are based on P measure (real-world measure)
         S[:, i+1] = S[:,i] * np.exp((mu-0.5*sigma_P**2)*dt + sigma_P*dW )
+        
+        # Get call option price
+        f[:,i+1] = CallPrice(S[:,i+1], K, T_call-t[i+1], r, sigma_Q)
         
         # REBALANCE STEP
         #     rebalance only when we see alpha reaches boundary, then update the boundary.
@@ -58,10 +69,11 @@ def GammaMoveHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
                     upper_b[j] = alpha[j, i+1] + band
                     lower_b[j] = alpha[j, i+1] - band
             
+            cost_transaction = trans_cost_asset*np.abs(alpha[:,i+1] - alpha[:,i]) + trans_cost_option*np.abs(gamma[:,i+1] - gamma[:,i])
+            total_trans_cost += cost_transaction
             # accumulate bank account, and minus all transaction costs & payment
             Y[:,i+1] = Y[:,i] * np.exp(r*dt) - (alpha[:,i+1] - alpha[:,i]) * S[:,i+1] - \
-                        (gamma[:,i+1] - gamma[:,i]) * CallPrice(S[:,i+1], K, T_call-t[i+1], r, sigma_Q) - \
-                        trans_cost_asset*np.abs(alpha[:,i+1] - alpha[:,i]) - trans_cost_option*np.abs(gamma[:,i+1] - gamma[:,i])
+                        (gamma[:,i+1] - gamma[:,i]) * f[:,i+1] - cost_transaction
             
                 
             
@@ -73,16 +85,18 @@ def GammaMoveHedge(S0, mu, sigma_P, sigma_Q, r, K, T, T_call, Ndt, Nsims, trans_
     
     
     # liquidate assets (and options, if owned)
-    Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] + gamma[:,-2] * CallPrice(S[:,-1], K, T_call-T, r, sigma_Q) \
-                - np.abs(alpha[:,-2]) * trans_cost_asset - np.abs(gamma[:,-2]) * trans_cost_option
+    cost_transaction = np.abs(alpha[:,-2]) * trans_cost_asset + np.abs(gamma[:,-2]) * trans_cost_option
+    total_trans_cost += cost_transaction
+    Y[:,-1] = Y[:,-2]* np.exp(r*dt) + alpha[:,-2] * S[:,-1] + gamma[:,-2] * f[:,-1] - cost_transaction
     
     # Compute PnL and BV
     # PnL - profit and loss
     # BV - book value
     PnL = Y[:,-1] - payoff
-    BV = Y + S * alpha 
+    BV = Y + S * alpha + f * gamma
+    BV[:,-1] = Y[:,-1]
     
     # return everything
-    return t, S, Y, alpha, gamma, BV, PnL
+    return t, S, Y, alpha, gamma, BV, PnL,total_trans_cost
     
 
