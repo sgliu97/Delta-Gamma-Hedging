@@ -1,2 +1,2 @@
-# STA2503_Project_2
+# Delta-Gamma Hedging Report
 #
